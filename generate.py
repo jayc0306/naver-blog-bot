@@ -187,7 +187,7 @@ DRAFT_SCHEMA = """{
    {"type":"me","content":"..."},
    {"type":"embed","content":"..."}
  ],
- "tags":["8~10개, # 없이"],
+ "tags":["중요한 순서대로, # 없이. 띄어쓰기 포함 전체 100자 이내라 핵심만 (보통 8~12개)"],
  "fact_checks":[{"claim":"...","source":"https://..."}]
 }"""
 
@@ -299,6 +299,23 @@ def sanitize(draft: dict, me_max: int = 1) -> dict:
 
 # ---------------------------------------------------------------- 렌더링
 
+TAG_LIMIT = 100  # 네이버 블로그 태그: 띄어쓰기 포함 100자
+
+
+def tags_line(tags: list[str], limit: int = TAG_LIMIT) -> str:
+    """중요한 순서대로 넣다가 100자를 넘기 직전에 멈춘다. 중복 제거."""
+    out, seen = "", set()
+    for t in tags:
+        t = "#" + str(t).replace(" ", "").lstrip("#")
+        if len(t) < 2 or t in seen:
+            continue
+        cand = f"{out} {t}" if out else t
+        if len(cand) > limit:
+            continue  # 긴 태그는 건너뛰고 짧은 다음 태그가 들어갈 수 있으면 넣는다
+        out = cand
+        seen.add(t)
+    return out
+
 def render(draft: dict, title_idx: int, footer: str = "") -> str:
     """스마트에디터에 그대로 붙여넣는 텍스트."""
     lines = [draft["titles"][title_idx]["text"], "", "🖼 [대표 이미지: 카드 00 썸네일]", ""]
@@ -324,8 +341,7 @@ def render(draft: dict, title_idx: int, footer: str = "") -> str:
             lines += [f"✍️ [직접 쓰기] {c}", ""]
     if footer:
         lines += ["", footer]
-    tags = " ".join("#" + t.replace(" ", "").lstrip("#") for t in draft.get("tags", []))
-    lines += ["", tags]
+    lines += ["", tags_line(draft.get("tags", []))]
     text = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
@@ -401,7 +417,7 @@ def segments(draft: dict, title_idx: int, footer: str = "") -> list[tuple]:
     if footer:
         buf += ["", footer]
     flush()
-    tags = " ".join("#" + t.replace(" ", "").lstrip("#") for t in draft.get("tags", []))
+    tags = tags_line(draft.get("tags", []))
     if tags:
         out.append(("tags", tags))
     return out
