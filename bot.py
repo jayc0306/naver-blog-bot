@@ -21,7 +21,9 @@ import store
 
 load_dotenv(Path(__file__).parent / ".env", encoding="utf-8-sig")
 BASE = Path(__file__).parent
-CONFIG_PATH = Path(sys.argv[1]) if len(sys.argv) > 1 else BASE / "presets" / os.environ.get("PRESET", "travel.yaml")
+# python bot.py presets/xxx.yaml 처럼 설정 파일을 직접 줄 때만 인자로 인식 (actions_run.py daily 같은 인자는 무시)
+_arg_cfg = next((a for a in sys.argv[1:] if a.endswith((".yaml", ".yml"))), None)
+CONFIG_PATH = Path(_arg_cfg) if _arg_cfg else BASE / "presets" / os.environ.get("PRESET", "travel.yaml")
 CFG = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
 TZ = ZoneInfo(CFG.get("timezone", "Asia/Seoul"))
 # 서버에서는 DATA_ROOT(예: /data, 영구 저장 볼륨)를 쓰고, PC에서는 프로그램 폴더 안 data/ 를 쓴다
