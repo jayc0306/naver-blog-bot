@@ -169,7 +169,21 @@ def manual_topic(text: str) -> dict:
             "seed": "직접 입력", "sources": press[:3]}
 
 
+REVIEW_SEED = "후기 메모"
+DEFAULT_REVIEW_RULES = """- 글쓴이가 직접 다녀온 후기다. 메모에 있는 경험·시간·숫자·가격·감정을 그대로 살리고, 메모에 없는 경험은 절대 지어내지 않는다.
+- 구조: 장소명과 한 줄 요약 → 시간 순서 소제목(도착·대기 → 입장 → 메뉴·구매 → 가격 → 총평).
+- 1인칭 구어체(~했어요, ~더라구요). 솔직한 한마디는 살리되 과장하지 않는다.
+- 마지막은 다시 갈지, 누구에게 추천하는지 솔직한 결론.
+- 영업시간·주소 같은 매장 정보는 확인된 것만.
+- 이미지는 photo(글쓴이가 찍은 사진 자리, 메모에 나온 장면 위주)와 card(핵심 숫자 1~2개)만. aiimg는 쓰지 않는다."""
+
+
 def build_draft(topic: dict) -> dict:
+    if topic.get("seed") == REVIEW_SEED:  # 내 경험 메모로 쓰는 후기 글
+        return generate.write_draft(CFG["model"], CFG["category"], topic, topic["sources"], style_notes(),
+                                    CFG.get("review_rules", DEFAULT_REVIEW_RULES),
+                                    "photo, card, place, link 블록만 사용. aiimg 금지.",
+                                    CFG.get("web_search", True), 0)
     articles, seen = [], set()
     topic["sources"].sort(key=lambda a: not a.get("official"))  # 보도자료를 맨 앞에
     try:
@@ -350,6 +364,12 @@ async def finalize(bot, did: int, idx: int) -> None:
             await send_pause()
         elif kind == "place":
             await bot.send_message(CHAT_ID, f"📍 여기에 지도: 에디터의 '장소' 버튼 → '{seg[1]}' 검색해서 추가")
+            await send_pause()
+        elif kind == "link":
+            label, url = seg[1], seg[2]
+            await bot.send_message(CHAT_ID, f"🔗 여기에 '{label}' 링크 ↓ 아래 주소를 붙여넣으면 카드로 바뀌어요")
+            await send_pause()
+            await bot.send_message(CHAT_ID, url)
             await send_pause()
         elif kind == "tags":
             await bot.send_message(CHAT_ID, "🏷 아래 태그를 복사해서 에디터 '태그' 칸에 붙여넣기 (쉼표로 구분돼 있어요)")

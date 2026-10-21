@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 import bot  # 설정·파이프라인 재사용 (텔레그램 상시 연결은 안 씀)
+import cards
 import store
 
 API = "https://api.telegram.org/bot{token}/{method}"
@@ -141,6 +142,16 @@ async def handle(tg: TG, upd: dict, state: dict) -> None:
     msg = upd.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
     text = (msg.get("text") or "").strip()
+
+    # 사진을 보내면 → 그 사진으로 홈판용 썸네일 만들기 (캡션 = 썸네일 문구)
+    file_id = None
+    if msg.get("photo"):
+        file_id = msg["photo"][-1]["file_id"]
+    elif (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
+        file_id = msg["document"]["file_id"]
+    if file_id and chat == bot.CHAT_ID:
+        await make_thumb(tg, file_id, (msg.get("caption") or "").strip())
+        return
     if not text:
         return
     if chat != bot.CHAT_ID:
@@ -148,19 +159,53 @@ async def handle(tg: TG, upd: dict, state: dict) -> None:
             await tg.send_message(chat, f"chat id: {chat}\nGitHub Secrets 의 TELEGRAM_CHAT_ID 에 넣어주세요.")
         return
     if text.startswith("/start"):
-        await tg.send_message(chat, "✅ GitHub에서 작동 중이에요.\n· 글감을 한 줄로 보내면 30분 안에 완성본이 와요\n· /run → 지금 바로 오늘 글 찾기\n· 매일 아침 7시 반쯤 자동으로 와요")
+        await tg.send_message(chat, "✅ GitHub에서 작동 중이에요. (보낸 건 10분 안에 처리돼요)\n"
+                              "· 글감 한 줄 → 정보형 완성본\n"
+                              "· 후기: 장소명 + 줄바꿈 + 메모 → 내 경험 후기 글\n"
+                              "· 사진 + 캡션(썸네일 문구) → 홈판용 썸네일\n"
+                              "· /run → 오늘 글 지금 찾기 · /today → 현황")
     elif text.startswith("/run"):
         state.pop("last_daily", None)
         await daily(tg, state)
     elif text.startswith("/today"):
         d = bot.today()
         await tg.send_message(chat, f"📊 {d} 완성 {store.count_day(d, ('approved', 'published'))} · 발행 {store.count_day(d, ('published',))} / 목표 {bot.CFG['posts_per_day']}")
+    elif text.startswith("후기"):
+        body = text[2:].lstrip(":： \n")
+        first, _, rest = body.partition("\n")
+        if len(body) < 20:
+            await tg.send_message(chat, "후기 메모가 너무 짧아요. 이렇게 보내주세요:\n\n후기: 한정선 신세계 강남점\n9시 20분 도착, 테이블링 73번째\n11시 입장 카톡 옴\n10개 57,700원\n맛있는데 웨이팅 생각하면 재방문은 글쎄")
+            return
+        await tg.send_message(chat, f"📝 '{first.strip()[:40]}' 후기로 쓸게요.")
+        topic = {"keyword": first.strip()[:40], "entity": first.strip()[:20], "angle": "직접 다녀온 후기",
+                 "why_now": "", "seed": bot.REVIEW_SEED,
+                 "sources": [{"title": f"글쓴이 메모: {first.strip()}", "desc": "", "url": "", "naver_link": "",
+                              "body": rest.strip() or body, "official": False}]}
+        tid = store.add_topic(bot.today(), topic)
+        store.claim_topic(tid)
+        await produce(tg, tid)
     elif not text.startswith("/"):
         await tg.send_message(chat, f"📝 '{text[:60]}' 받았어요.")
         topic = await asyncio.to_thread(bot.manual_topic, text[:60])
         tid = store.add_topic(bot.today(), topic)
         store.claim_topic(tid)
         await produce(tg, tid)
+
+
+async def make_thumb(tg: TG, file_id: str, caption: str) -> None:
+    if not caption:  # 캡션이 없으면 오늘 마지막 초안의 썸네일 문구 사용
+        with store.db() as c:
+            row = c.execute("SELECT body FROM drafts ORDER BY id DESC LIMIT 1").fetchone()
+        caption = json.loads(row["body"]).get("thumbnail_text", "") if row else ""
+    if not caption:
+        await tg.send_message(bot.CHAT_ID, "사진에 캡션으로 썸네일 문구를 같이 보내주세요. 줄바꿈하면 마지막 줄이 노란 띠로 들어가요.\n예)\n2026\n사천에어쇼\n일정 및 주차장 정보")
+        return
+    f = tg.call("getFile", {"file_id": file_id})
+    data = tg.http.get(f"https://api.telegram.org/file/bot{tg.token}/{f['file_path']}").content
+    out = bot.OUT / "thumbs" / f"{file_id[-12:]}.jpg"
+    path = cards.make_photo_thumb(data, caption, out, bot.font_path(), bot.CFG.get("font_index", 0))
+    await tg.send_document(bot.CHAT_ID, path, filename="thumbnail.jpg",
+                           caption="⭐ 썸네일 완성 (원본 화질 파일). 블로그 맨 위에 넣고 대표 이미지로 지정")
 
 
 async def poll(tg: TG, state: dict) -> None:

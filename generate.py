@@ -92,7 +92,7 @@ DRAFT_TOOL_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["text", "heading", "card", "table", "photo", "embed", "me", "aiimg", "place"]},
+                    "type": {"type": "string", "enum": ["text", "heading", "card", "table", "photo", "embed", "me", "aiimg", "place", "link"]},
                     "content": {"type": "string"},
                 },
                 "required": ["type", "content"],
@@ -335,6 +335,9 @@ def render(draft: dict, title_idx: int, footer: str = "") -> str:
             lines += [f"🎨 [AI 이미지] {c}", ""]
         elif t == "place":
             lines += [f"📍 [지도 첨부] {c}", ""]
+        elif t == "link":
+            label, _, url = c.partition("|")
+            lines += [f"🔗 {label.strip()}", url.strip() or label.strip(), ""]
         elif t == "embed":
             lines += [f"▶️ [영상 임베드] {c}", ""]
         elif t == "me":
@@ -368,6 +371,8 @@ def render_checklist(draft: dict) -> str:
         out.append("· 🎨 AI 이미지는 에디터에서 'AI 활용' 표시 켜기")
     if "place" in types_:
         out.append("· 📍 에디터 '장소' 버튼으로 지도 첨부")
+    if "link" in types_:
+        out.append("· 🔗 링크는 열어서 맞는 페이지인지 확인")
     out += [
         "· 뉴스 사진·남의 이미지 쓰지 않기",
         "· 모바일 미리보기로 줄바꿈 확인",
@@ -408,6 +413,12 @@ def segments(draft: dict, title_idx: int, footer: str = "") -> list[tuple]:
         elif t == "place":
             flush()
             out.append(("place", c))
+        elif t == "link":
+            label, _, url = c.partition("|")
+            url = (url or label).strip()
+            if url.startswith("http"):
+                flush()
+                out.append(("link", label.strip() if _ else "공식 안내", url))
         elif t == "photo":
             flush()
             out.append(("photo", c))

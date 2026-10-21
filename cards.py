@@ -1,7 +1,9 @@
 """텍스트 카드 이미지 생성 (1080x1080). 첫 장은 썸네일."""
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 FALLBACK_FONTS = [
     str(Path(__file__).parent / "fonts" / "Pretendard-ExtraBold.otf"),
@@ -141,3 +143,46 @@ def make_cards(draft: dict, folder: Path, prefix: str, font_path: str, font_inde
         else:
             paths.append(make_card(b["content"], out, font_path, font_index, colors, label=label))
     return paths
+
+
+def make_photo_thumb(photo: bytes, text: str, out: Path, font_path: str, font_index: int,
+                     band: str = "#FFD84D") -> Path:
+    """내 사진 + 큰 제목 썸네일 (1080x1080). 마지막 줄은 노란 띠 위에 검은 글씨.
+    홈판 썸네일처럼: 위쪽 어둡게, 큰 흰 글씨에 검은 테두리."""
+    img = Image.open(BytesIO(photo)).convert("RGB")
+    img = ImageOps.fit(img, (SIZE, SIZE), Image.LANCZOS, centering=(0.5, 0.55))
+    # 위쪽 60%를 아래로 갈수록 옅어지는 검은 그라데이션으로 덮기
+    shade = Image.new("L", (1, SIZE))
+    for y in range(SIZE):
+        shade.putpixel((0, y), max(0, int(190 * (1 - y / (SIZE * 0.62)))))
+    img = Image.composite(Image.new("RGB", (SIZE, SIZE), "black"), img, shade.resize((SIZE, SIZE)))
+    d = ImageDraw.Draw(img)
+
+    lines = [l.strip() for l in text.replace("/", "\n").split("\n") if l.strip()][:3] or [" "]
+    head, tail = (lines[:-1], lines[-1]) if len(lines) >= 2 else (lines, None)
+    y = 90
+    for line in head:
+        size = 170
+        while size > 70:
+            f = _font(font_path, font_index, size)
+            if d.textlength(line, font=f) <= SIZE - 120:
+                break
+            size -= 8
+        w = d.textlength(line, font=f)
+        d.text(((SIZE - w) / 2, y), line, font=f, fill="#FFFFFF", stroke_width=max(6, size // 18), stroke_fill="#111111")
+        y += int(size * 1.18)
+    if tail:
+        size = 92
+        while size > 48:
+            f = _font(font_path, font_index, size)
+            if d.textlength(tail, font=f) <= SIZE - 220:
+                break
+            size -= 6
+        w = d.textlength(tail, font=f)
+        pad_x, pad_y = 40, 22
+        x0 = (SIZE - w) / 2 - pad_x
+        d.rectangle([x0, y + 10, x0 + w + pad_x * 2, y + 10 + size + pad_y * 2], fill=band)
+        d.text(((SIZE - w) / 2, y + 10 + pad_y - size * 0.08), tail, font=f, fill="#111111")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out, "JPEG", quality=92)
+    return out
