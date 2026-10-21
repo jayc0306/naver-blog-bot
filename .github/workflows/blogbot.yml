@@ -1,0 +1,79 @@
+name: blogbot
+
+on:
+  schedule:
+    - cron: "30 22 * * *"            # 매일 07:30 (한국시간) 오늘 글 자동 생성
+    - cron: "*/10 23,0-14 * * *"     # 08:00~23:50 (한국시간) 10분마다 텔레그램 메시지 처리
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "daily = 오늘 글 바로 생성 / poll = 메시지 처리"
+        default: "daily"
+
+permissions:
+  contents: write   # 한 달에 한 번 빈 커밋(예약 실행이 60일 뒤 꺼지는 것 방지)에만 사용
+
+concurrency:
+  group: blogbot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # 봇 기억(읽은 위치, 쓴 주제, 초안)은 공개 저장소에 올리지 않고 비공개 캐시에 보관
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: botstate-${{ github.run_id }}
+          restore-keys: botstate-
+
+      - name: Run bot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          PRESET: ${{ vars.PRESET || 'travel.yaml' }}
+          DATA_ROOT: state
+          ACTIONS_MODE: "1"
+          TZ: Asia/Seoul
+          PYTHONUTF8: "1"
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            if [ "${{ github.event.schedule }}" = "30 22 * * *" ]; then MODE=daily; else MODE=poll; fi
+          fi
+          rm -rf state/*/output
+          python actions_run.py "$MODE"
+          rm -rf state/*/output
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: botstate-${{ github.run_id }}
+
+      - name: Keepalive (monthly)
+        if: github.event.schedule == '30 22 * * *'
+        run: |
+          if [ "$(TZ=Asia/Seoul date +%d)" = "01" ]; then
+            git config user.name "blogbot"
+            git config user.email "blogbot@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive $(date +%F)"
+            git push
+          fi
