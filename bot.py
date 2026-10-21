@@ -352,6 +352,8 @@ async def finalize(bot, did: int, idx: int) -> None:
             await bot.send_message(CHAT_ID, f"📍 여기에 지도: 에디터의 '장소' 버튼 → '{seg[1]}' 검색해서 추가")
             await send_pause()
         elif kind == "tags":
+            await bot.send_message(CHAT_ID, "🏷 아래 태그를 복사해서 에디터 '태그' 칸에 붙여넣기 (쉼표로 구분돼 있어요)")
+            await send_pause()
             await bot.send_message(CHAT_ID, seg[1])
             await send_pause()
 

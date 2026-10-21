@@ -187,7 +187,7 @@ DRAFT_SCHEMA = """{
    {"type":"me","content":"..."},
    {"type":"embed","content":"..."}
  ],
- "tags":["중요한 순서대로, # 없이. 띄어쓰기 포함 전체 100자 이내라 핵심만 (보통 8~12개)"],
+ "tags":["중요한 순서대로 15~25개, # 없이, 띄어쓰기 없이"],
  "fact_checks":[{"claim":"...","source":"https://..."}]
 }"""
 
@@ -299,22 +299,22 @@ def sanitize(draft: dict, me_max: int = 1) -> dict:
 
 # ---------------------------------------------------------------- 렌더링
 
-TAG_LIMIT = 100  # 네이버 블로그 태그: 띄어쓰기 포함 100자
+TAG_MAX_COUNT = 30   # 네이버 블로그 태그: 최대 30개
+TAG_MAX_LEN = 100    # 태그 하나당 띄어쓰기 포함 100자
 
 
-def tags_line(tags: list[str], limit: int = TAG_LIMIT) -> str:
-    """중요한 순서대로 넣다가 100자를 넘기 직전에 멈춘다. 중복 제거."""
-    out, seen = "", set()
+def tags_line(tags: list[str]) -> str:
+    """태그 칸에 그대로 붙여넣는 형식: 쉼표로 구분, 최대 30개, 중복 제거."""
+    out, seen = [], set()
     for t in tags:
-        t = "#" + str(t).replace(" ", "").lstrip("#")
-        if len(t) < 2 or t in seen:
+        t = str(t).strip().lstrip("#").replace(" ", "")[:TAG_MAX_LEN]
+        if not t or t in seen:
             continue
-        cand = f"{out} {t}" if out else t
-        if len(cand) > limit:
-            continue  # 긴 태그는 건너뛰고 짧은 다음 태그가 들어갈 수 있으면 넣는다
-        out = cand
         seen.add(t)
-    return out
+        out.append(t)
+        if len(out) >= TAG_MAX_COUNT:
+            break
+    return ", ".join(out)
 
 def render(draft: dict, title_idx: int, footer: str = "") -> str:
     """스마트에디터에 그대로 붙여넣는 텍스트."""
@@ -341,7 +341,7 @@ def render(draft: dict, title_idx: int, footer: str = "") -> str:
             lines += [f"✍️ [직접 쓰기] {c}", ""]
     if footer:
         lines += ["", footer]
-    lines += ["", tags_line(draft.get("tags", []))]
+    lines += ["", "태그: " + tags_line(draft.get("tags", []))]
     text = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
 
