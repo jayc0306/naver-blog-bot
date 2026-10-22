@@ -124,6 +124,61 @@ class DraftBridgeTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('localStorage.getItem("attempts")'), '1')
         self.assertIsNone(self.page.evaluate('localStorage.getItem("published")'))
 
+    def test_manual_login_resumes_writer_in_same_browser_session(self):
+        fixture = (Path(__file__).parent / 'fixtures/naver_editor.html').read_text(encoding='utf-8')
+        def writer(route):
+            if 'fixture_session=present' in (route.request.header_value('cookie') or ''):
+                route.fulfill(body=fixture, content_type='text/html')
+            else:
+                route.fulfill(body='<script>location.replace("https://nid.naver.com/nidlogin.login")</script>',
+                              content_type='text/html')
+        self.page.route('http://fixture.test/protected', writer)
+        self.page.route('https://nid.naver.com/**', lambda route: route.fulfill(body='<h1>Login fixture</h1>'))
+        self.page.goto('http://fixture.test/protected')
+        self.page.wait_for_url('https://nid.naver.com/nidlogin.login')
+        self.assertTrue(naver.is_login_page(self.page))
+        prompts = []
+        def manual_login(message):
+            prompts.append(message)
+            self.context.add_cookies([{'name': 'fixture_session', 'value': 'present', 'url': 'http://fixture.test'}])
+            return ''
+        frame = naver.wait_for_editor(self.page, 'http://fixture.test/protected',
+                                      prompt=manual_login, timeout_ms=100)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(frame.locator(naver.TITLE).count(), 1)
+        self.assertFalse(naver.is_login_page(self.page))
+        self.assertIsNone(self.page.evaluate('localStorage.getItem("saved")'))
+
+    def test_cancelled_login_is_not_treated_as_editor_access(self):
+        self.page.route('https://nid.naver.com/**', lambda route: route.fulfill(body='<h1>Login fixture</h1>'))
+        self.page.goto('https://nid.naver.com/nidlogin.login')
+        with self.assertRaises(naver.DraftError):
+            naver.wait_for_editor(self.page, 'http://fixture.test/protected', prompt=lambda _: 'q', timeout_ms=100)
+        self.assertTrue(naver.is_login_page(self.page))
+
+    def test_login_redirect_loop_stops_after_one_manual_attempt(self):
+        self.page.route('http://fixture.test/protected', lambda route: route.fulfill(
+            body='<script>location.replace("https://nid.naver.com/nidlogin.login")</script>', content_type='text/html'))
+        self.page.route('https://nid.naver.com/**', lambda route: route.fulfill(body='<h1>Login fixture</h1>'))
+        self.page.goto('http://fixture.test/protected')
+        self.page.wait_for_url('https://nid.naver.com/nidlogin.login')
+        prompts = []
+        def unchanged_login(message):
+            prompts.append(message)
+            return ''
+        with self.assertRaisesRegex(naver.DraftError, '반복 시도를 멈춥니다'):
+            naver.wait_for_editor(self.page, 'http://fixture.test/protected',
+                                  prompt=unchanged_login, timeout_ms=100)
+        self.assertEqual(len(prompts), 1)
+
+    def test_unknown_editor_is_not_reloaded_or_overwritten(self):
+        self.page.set_content('<main>원래 화면</main>')
+        before_url = self.page.url
+        with self.assertRaises(naver.DraftError):
+            naver.wait_for_editor(self.page, 'http://fixture.test/protected', prompt=lambda _: 'q', timeout_ms=100)
+        self.assertEqual(self.page.url, before_url)
+        self.assertEqual(self.page.locator('main').inner_text(), '원래 화면')
+
 
 if __name__ == '__main__':
     unittest.main()

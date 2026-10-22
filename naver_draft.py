@@ -11,7 +11,9 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -105,9 +107,68 @@ def load_bundle(manifest):
 
 def find_editor(page):
     for frame in page.frames:
+        if frame.is_detached():
+            continue
         if frame.locator(TITLE).count() == 1 and frame.locator(BODY).count() > 0:
             return frame
     raise DraftError('빈 글쓰기 화면을 찾지 못했습니다. 로그인·도움말·복구 창을 확인해 주세요.')
+
+
+def is_login_page(page):
+    for frame in page.frames:
+        url = urlsplit(frame.url)
+        if url.hostname == 'nid.naver.com' and 'login' in url.path.lower():
+            return True
+    return False
+
+
+def wait_for_editor(page, write_url, prompt=None, timeout_ms=8000):
+    """Resume after manual authentication in this context; never read cookie values."""
+    from playwright.sync_api import Error as BrowserError
+    prompt = input if prompt is None else prompt
+    login_attempted = False
+    while True:
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            if page.is_closed():
+                raise DraftError('전용 브라우저 창이 닫혔습니다. 명령을 다시 실행해 주세요.')
+            try:
+                return find_editor(page)
+            except (DraftError, BrowserError):
+                pass  # Frames can attach/detach while the login redirect completes.
+            if is_login_page(page) or time.monotonic() >= deadline:
+                break
+            page.wait_for_timeout(100)
+        login_required = is_login_page(page)
+        if login_required:
+            if login_attempted:
+                raise DraftError('로그인 완료 확인 후에도 글쓰기 요청이 다시 로그인 화면으로 이동했습니다. 반복 시도를 멈춥니다. 평소 브라우저에서 본인 블로그의 글쓰기 접근과 현재 창의 로그인 안내를 확인해 주세요.')
+            print('현재 전용 Edge/Chrome 창에 네이버 로그인이 필요합니다.', flush=True)
+            reply = prompt('이 창에서 직접 로그인·추가 인증을 완료하세요. 로그인 상태 유지를 선택한 뒤 Enter (취소: q): ')
+        else:
+            reply = prompt('아직 글쓰기 편집기를 찾지 못했습니다. 이 창에서 글쓰기를 열고 팝업을 정리한 뒤 Enter (취소: q): ')
+        if reply.strip().lower() == 'q':
+            raise DraftError('편집기 접근 확인을 취소했습니다. 로그인 성공이나 임시저장으로 처리하지 않았습니다.')
+        # Login may already have returned to the writer. Keep that document intact.
+        try:
+            return find_editor(page)
+        except (DraftError, BrowserError):
+            pass
+        if login_required:
+            # Explicit user intervention is the prerequisite for another navigation.
+            # Login in a popup/new tab shares this context's session with this page.
+            login_attempted = True
+            page.goto(write_url, wait_until='domcontentloaded')
+
+
+def error_message(exc):
+    if isinstance(exc, DraftError):
+        return str(exc)
+    if isinstance(exc, FileExistsError):
+        return '내보내기 폴더가 이미 있습니다. 기존 manifest.json으로 save를 실행하거나 다른 출력 폴더를 지정하세요.'
+    if type(exc).__name__ == 'TimeoutError':
+        return '브라우저 응답 대기 시간이 초과되었습니다. 현재 화면의 팝업·이미지 업로드·저장 상태를 확인해 주세요.'
+    return '처리 중 오류 (' + type(exc).__name__ + '). 화면과 입력 경로를 확인해 주세요.'
 
 
 def visible_dialog(frame):
@@ -213,6 +274,8 @@ def main(argv=None):
         if name == 'save':
             sub.add_argument('manifest', type=Path)
             sub.add_argument('--blog-id', required=True)
+        else:
+            sub.add_argument('--blog-id', help='로그인 후 실제 글쓰기 접근을 확인할 블로그 ID')
     args = parser.parse_args(argv)
     if args.command == 'export':
         if args.db:
@@ -227,7 +290,9 @@ def main(argv=None):
         print('preview.html을 열어 제목·본문·이미지·출처를 확인하세요.')
         return 0
     from playwright.sync_api import sync_playwright
-    if args.command == 'save' and not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.blog_id):
+    if not args.blog_id:
+        args.blog_id = input('로그인 확인에 사용할 블로그 ID (주소의 blog.naver.com/ 다음 부분): ').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.blog_id):
         raise DraftError('블로그 아이디 형식을 확인해 주세요.')
     packet = load_bundle(args.manifest) if args.command == 'save' else None
     receipt = None
@@ -245,15 +310,16 @@ def main(argv=None):
         page = context.new_page()
         page.set_default_timeout(20000)
         try:
-            if args.command == 'login':
-                page.goto('https://nid.naver.com/nidlogin.login', wait_until='domcontentloaded')
-                input('브라우저에서 직접 로그인하세요. 로그인 완료 후 Enter: ')
-                print('브라우저 세션을 로컬 프로필에 보관합니다. 비밀번호는 이 도구가 받지 않습니다.')
-                return 0
             write_url = 'https://blog.naver.com/PostWriteForm.naver?blogId=' + args.blog_id
             page.goto(write_url, wait_until='domcontentloaded')
-            input('로그인과 대상 블로그를 확인하고, 복구·도움말 창을 정리해 빈 편집기를 연 뒤 Enter: ')
-            frame = find_editor(page)
+            frame = wait_for_editor(page, write_url)
+            if args.command == 'login':
+                print('현재 전용 브라우저 세션에서 글쓰기 편집기 접근을 확인했습니다.', flush=True)
+                print('다음 실행에서 로그인이 다시 필요하면 같은 전용 창에서 로그인하고 이어갈 수 있습니다.')
+                input('확인이 끝나면 Enter를 눌러 전용 브라우저를 닫으세요: ')
+                return 0
+            input('대상 블로그의 빈 편집기인지 확인하고 복구·도움말 창을 정리한 뒤 Enter: ')
+            frame = wait_for_editor(page, write_url)
             fill_editor(page, frame, packet)
             with receipt.open('x', encoding='utf-8') as file:
                 json.dump({'status': 'save-attempted-unverified', 'title': packet['title']}, file, ensure_ascii=False)
@@ -270,10 +336,12 @@ def main(argv=None):
             print('임시글 다시 열기 검증 완료. 내용과 실제 사진·태그를 검토한 뒤 직접 발행하세요.')
             input('검토가 끝났으면 Enter를 눌러 전용 브라우저를 닫으세요: ')
             return 0
-        except Exception:
-            print('완료를 확인하지 못했습니다. 자동 재시도하지 않습니다. 브라우저 내용을 확인하세요.')
+        except Exception as exc:
+            # Explain the cause BEFORE waiting, while the user can inspect the browser.
+            print('실패: ' + error_message(exc), file=sys.stderr, flush=True)
+            print('완료를 확인하지 못했습니다. 자동 재시도하지 않습니다. 브라우저 내용을 확인하세요.', flush=True)
             input('확인 후 Enter를 누르면 브라우저를 닫습니다: ')
-            raise
+            return 1
         finally:
             context.close()
 
@@ -285,5 +353,5 @@ if __name__ == '__main__':
         raise SystemExit(130)
     except Exception as exc:
         # Browser exceptions may contain private page text or request URLs.
-        print(str(exc) if isinstance(exc, DraftError) else '처리 중 오류 (' + type(exc).__name__ + '). 화면과 입력 경로를 확인해 주세요.', file=sys.stderr)
+        print(error_message(exc), file=sys.stderr)
         raise SystemExit(1)
