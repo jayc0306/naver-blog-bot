@@ -7,7 +7,7 @@
 
 ## 1. 설치와 로그인
 
-Python 3.12를 python.org에서 설치할 때 Python launcher를 포함하세요. Microsoft Edge가 설치된 Windows PC를 기준으로 합니다.
+Microsoft Edge가 설치된 Windows PC를 기준으로 합니다. setup_naver.bat는 Python 3.12를 확인하고, 없으면 설치되어 있는 Python install manager의 py install 3.12 명령으로 설치를 시도합니다. 설치 관리자까지 없다면 python.org에서 Python 3.12와 Python launcher를 설치하세요.
 
 1. 압축을 풀고 setup_naver.bat를 실행합니다.
 2. 해당 폴더에서 명령 프롬프트(cmd)를 열고 아래 명령을 실행합니다.
@@ -17,6 +17,15 @@ Python 3.12를 python.org에서 설치할 때 Python launcher를 포함하세요
 열리는 전용 Edge 창에서 직접 로그인한 뒤 명령 프롬프트로 돌아와 Enter를 누릅니다. 추가 인증·CAPTCHA도 직접 처리합니다. Chrome을 쓰려면 login과 save 양쪽에 --browser chrome을 붙입니다.
 
 비밀번호를 코드나 채팅에 넣지 않습니다. 로그인 세션은 PC의 %LOCALAPPDATA%\NaverBlogBot\browser-profile에 보관합니다. 이 폴더는 로그인 권한을 포함하므로 공유·Git 업로드하지 마세요. 평소 브라우저의 사용자 프로필을 복사하지 않습니다. 같은 전용 프로필로 여러 실행을 동시에 켜지 마세요.
+
+### No runtime installed that matches 3.12 오류
+
+Python 실행 관리자만 있고 Python 3.12 본체가 없는 상태입니다. Windows 터미널에서 아래 두 명령을 순서대로 실행하세요.
+
+    py install 3.12
+    py -3.12 --version
+
+두 번째 명령에 Python 3.12.x가 표시되면 setup_naver.bat를 다시 실행합니다. 기존에 다운로드한 파일도 Python 설치 후 다시 실행할 수 있습니다. 수정된 설치 파일은 가상환경의 실제 실행 파일과 버전까지 확인하며, 생성 실패 시 의존성 설치로 진행하지 않습니다.
 
 ## 2. 비용 없이 테스트 초안 준비
 
