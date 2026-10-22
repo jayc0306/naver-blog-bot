@@ -5,6 +5,7 @@
 """
 import asyncio
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -87,7 +88,10 @@ async def produce(tg: TG, tid: int) -> None:
     if draft.get("_notice"):
         await tg.send_message(bot.CHAT_ID, draft["_notice"])
     titles = draft["titles"]
-    best = next((i for i, t in enumerate(titles) if "검색" in t.get("type", "")), 0)
+    # 하루 글을 번갈아: 홈판용 후킹 제목 ↔ 검색용 롱테일 제목 (어느 쪽이 먹히는지 비교)
+    n_today = store.count_day(bot.today(), ("approved", "published"))
+    want = ("궁금", "손실", "숫자") if n_today % 2 == 0 else ("검색",)
+    best = next((i for w in want for i, t in enumerate(titles) if w in t.get("type", "")), 0)
     others = "\n".join(f"· {t['text']}" for i, t in enumerate(titles) if i != best)
     if others:
         await tg.send_message(bot.CHAT_ID, f"🏷 다른 제목 후보 (마음에 들면 제목만 바꿔 쓰세요)\n{others}")
@@ -163,6 +167,7 @@ async def handle(tg: TG, upd: dict, state: dict) -> None:
                               "· 글감 한 줄 → 정보형 완성본\n"
                               "· 후기: 장소명 + 줄바꿈 + 메모 → 내 경험 후기 글\n"
                               "· 사진 + 캡션(썸네일 문구) → 홈판용 썸네일\n"
+                              "· 트렌드 + 줄바꿈 + 어드바이저 메인 트렌드 복사 → 주제·제목에 반영\n"
                               "· /run → 오늘 글 지금 찾기 · /today → 현황")
     elif text.startswith("/run"):
         state.pop("last_daily", None)
@@ -170,6 +175,14 @@ async def handle(tg: TG, upd: dict, state: dict) -> None:
     elif text.startswith("/today"):
         d = bot.today()
         await tg.send_message(chat, f"📊 {d} 완성 {store.count_day(d, ('approved', 'published'))} · 발행 {store.count_day(d, ('published',))} / 목표 {bot.CFG['posts_per_day']}")
+    elif text.startswith("트렌드"):
+        titles = parse_trends(text)
+        if len(titles) < 3:
+            await tg.send_message(chat, "크리에이터 어드바이저 → 트렌드 → 메인 유입 트렌드에서 글 목록을 통째로 복사해서\n\n트렌드\n(붙여넣기)\n\n이렇게 보내주세요.")
+            return
+        state["trends"] = {"date": bot.today(), "titles": titles}
+        load_trends(state)
+        await tg.send_message(chat, f"📈 홈판 트렌드 제목 {len(titles)}개 저장했어요. 3일 동안 주제 고르기와 제목 짓기에 반영돼요.\n지금 바로 반영해서 쓰려면 /run")
     elif text.startswith("후기"):
         body = text[2:].lstrip(":： \n")
         first, _, rest = body.partition("\n")
@@ -226,6 +239,35 @@ async def poll(tg: TG, state: dict) -> None:
         tg.call("getUpdates", {"offset": state["offset"], "timeout": 0})  # 처리 완료 확인
 
 
+def load_trends(state: dict) -> None:
+    """3일 이내에 받은 홈판 트렌드 제목을 봇에 넣는다."""
+    tr = state.get("trends") or {}
+    try:
+        fresh = (datetime.now(bot.TZ).date() - datetime.fromisoformat(tr.get("date", "")).date()).days <= 3
+    except ValueError:
+        fresh = False
+    bot.TREND_TITLES[:] = tr.get("titles", []) if fresh else []
+
+
+def parse_trends(text: str) -> list[str]:
+    """크리에이터 어드바이저에서 복사한 목록 → 제목만. 순위 숫자, 조회수, 날짜 줄은 버린다."""
+    out = []
+    for line in text.splitlines()[1:] if text.startswith("트렌드") else text.splitlines():
+        t = re.sub(r"^\s*\d+\s*[.)위]?\s*", "", line).strip()
+        if len(t) < 8 or re.fullmatch(r"[\d,.\s%:/-]+(회|명|분|시간 전|일 전)?", t):
+            continue
+        if t not in out:
+            out.append(t)
+    return out[:40]
+
+
+def missed_morning(state: dict) -> bool:
+    now = datetime.now(bot.TZ)
+    h, m = map(int, sorted(bot.CFG.get("schedule_times", ["07:30"]))[0].split(":"))
+    late = now.hour * 60 + now.minute >= h * 60 + m + 20   # 예약 시각 20분 지나도
+    return late and now.hour < 21 and state.get("last_daily") != bot.today()
+
+
 async def main(mode: str) -> None:
     store.init()
     token = bot.os.environ.get(bot.CFG.get("telegram_token_env", "TELEGRAM_BOT_TOKEN"), "").strip()
@@ -233,9 +275,15 @@ async def main(mode: str) -> None:
         sys.exit("TELEGRAM_BOT_TOKEN secret 이 비어 있어요.")
     tg = TG(token)
     state = load_state()
+    restored = bool(state)  # 이전 실행의 기억을 제대로 불러왔는지
+    load_trends(state)
     try:
         await poll(tg, state)          # 쌓인 메시지 먼저
         if mode == "daily":
+            await daily(tg, state)
+        elif restored and missed_morning(state):
+            # GitHub가 아침 예약 실행을 건너뛰는 날이 있어서, 그 뒤 첫 poll 실행이 대신 처리
+            bot.log.info("daily run was skipped by GitHub, catching up")
             await daily(tg, state)
     finally:
         save_state(state)

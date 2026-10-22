@@ -58,9 +58,18 @@ def font_path() -> str:
     return str(p if p.is_absolute() else BASE / p)
 
 
+# 사용자가 붙여넣은 크리에이터 어드바이저 '메인(홈판) 유입 트렌드' 제목들 (actions_run 이 채움)
+TREND_TITLES: list[str] = []
+
+
 def style_notes() -> str:
     p = BASE / CFG.get("style_notes", "style_notes.md")
-    return p.read_text(encoding="utf-8") if p.exists() else ""
+    notes = p.read_text(encoding="utf-8") if p.exists() else ""
+    if TREND_TITLES:
+        notes += ("\n\n## 지금 네이버 홈판에서 유입이 많은 글 제목 (크리에이터 어드바이저 메인 트렌드)\n"
+                  "제목의 길이·말투·후킹 방식을 참고한다. 문장을 베끼지는 않는다.\n"
+                  + "\n".join(f"- {t}" for t in TREND_TITLES[:30]))
+    return notes
 
 
 def chunks(text: str, size: int = 3900):
@@ -98,6 +107,11 @@ def build_candidates() -> list[tuple[int, dict]]:
             items = []
         if items:
             news[seed] = items
+    # 0) 오늘 홈판 메인 트렌드 (사용자가 붙여넣은 것)
+    if TREND_TITLES:
+        news = {"홈판 메인 트렌드(오늘)": [{"title": t, "desc": "네이버 홈판에서 지금 유입 많은 글", "url": f"trend:{i}",
+                                          "naver_link": ""} for i, t in enumerate(TREND_TITLES[:30])], **news}
+
     # 1-0) 다가오는 축제·행사 (관광공사)
     fest = fetch_fest()
     if fest:
