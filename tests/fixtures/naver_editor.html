@@ -1,0 +1,31 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Offline editor fixture</title>
+<button class="se-image-toolbar-button" onclick="document.querySelector('input').click()">사진</button>
+<input type="file" accept="image/*" hidden>
+<div class="se-title-text"><div contenteditable="true"></div></div>
+<div id="article" class="se-section-text"><div class="se-text-paragraph" contenteditable="true"></div></div>
+<button id="save">임시저장</button><button id="publish">발행</button><div id="notifications"></div>
+<script>
+const article = document.querySelector('#article');
+const title = document.querySelector('.se-title-text [contenteditable]');
+document.querySelector('input').onchange = (event) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const component = document.createElement('div');
+    component.className = 'se-component se-image';
+    const image = new Image(); image.src = reader.result; image.width = 80;
+    component.append(image); article.append(component);
+    const paragraph = document.createElement('div');
+    paragraph.className = 'se-text-paragraph'; paragraph.contentEditable = 'true';
+    paragraph.style.minHeight = '24px'; article.append(paragraph);
+  };
+  reader.readAsDataURL(event.target.files[0]);
+  event.target.value = '';
+};
+document.querySelector('#save').onclick = () => {
+  localStorage.setItem('saved', JSON.stringify({title: title.innerHTML, article: article.innerHTML}));
+  document.querySelector('#notifications').innerHTML = '<div role="status">임시저장되었습니다</div>';
+};
+document.querySelector('#publish').onclick = () => localStorage.setItem('published', 'yes');
+const saved = JSON.parse(localStorage.getItem('saved') || 'null');
+if (saved) { title.innerHTML = saved.title; article.innerHTML = saved.article; }
+</script></html>

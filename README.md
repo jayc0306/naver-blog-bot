@@ -1,5 +1,7 @@
 # 네이버 블로그 반자동 봇 · 여행·축제 정보 (하루 2개)
 
+Windows에서 편집기 입력·임시저장을 연결하는 초기 버전은 [NAVER_DRAFT_WINDOWS.md](NAVER_DRAFT_WINDOWS.md)를 참고하세요. 실제 네이버 화면 호환성은 로그인한 PC에서 추가 검증이 필요합니다.
+
 기본 프리셋: `presets/travel.yaml`. 생활경제로 돌리려면 `.env`에 `PRESET=economy.yaml`.
 
 소재 수집과 초안은 자동, 고르고 다듬고 발행하는 건 사람. 발행 자동화는 일부러 뺐다 (매크로 발행은 네이버 제재 대상).
