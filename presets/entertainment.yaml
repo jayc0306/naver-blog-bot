@@ -8,6 +8,10 @@ use_press_releases: false
 # candidates = 아침에 봇이 후보 추천 / remind = 아침엔 알림만, 글감은 내가 보냄 (추천 비용 절약)
 daily_mode: "candidates"
 posts_per_day: 2
+# 서버(GitHub) 모드: 이 시각마다 글을 나눠서 생성 → 바로 발행하면 골든타임에 걸림
+post_slots: ["07:20", "12:00"]
+# homefeed = 홈판용 후킹 제목만 / search = 검색용 제목만 (한 계정에 섞지 않기)
+title_mode: "homefeed"
 schedule_times: ["07:30", "18:30"]   # 연예는 속도 싸움이라 하루 두 번 후보 수집 (회당 1개 발행)
 candidate_pool: 12        # Claude가 뉴스에서 뽑는 1차 후보 수
 candidates_per_run: 4     # 데이터랩 상승률로 거른 뒤 텔레그램에 보낼 수
@@ -15,7 +19,7 @@ news_per_seed: 15
 news_max_age_hours: 24
 timezone: "Asia/Seoul"
 # 예약발행 추천 시간대. n번째 글은 n번째 창에서 랜덤 분으로 추천.
-publish_windows: [["11:30", "13:00"], ["18:30", "21:00"]]
+publish_windows: [["07:30", "09:30"], ["12:00", "13:30"]]   # 골든타임(07~19시) 안에서 출근길·점심
 # 초안 쓸 때 AI가 공식 사이트를 직접 검색해 사실 확인 (검색 1,000회당 $10, 글당 최대 3회)
 web_search: true
 # 글마다 내가 직접 한두 줄 쓰는 칸 수 (0~2). 0이면 AI 글 그대로라 계정 리스크가 커짐

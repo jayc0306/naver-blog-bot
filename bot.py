@@ -197,7 +197,7 @@ def build_draft(topic: dict) -> dict:
         return generate.write_draft(CFG["model"], CFG["category"], topic, topic["sources"], style_notes(),
                                     CFG.get("review_rules", DEFAULT_REVIEW_RULES),
                                     "photo, card, place, link 블록만 사용. aiimg 금지.",
-                                    CFG.get("web_search", True), 0)
+                                    CFG.get("web_search", True), 0, CFG.get("title_mode", "homefeed"))
     articles, seen = [], set()
     topic["sources"].sort(key=lambda a: not a.get("official"))  # 보도자료를 맨 앞에
     try:
@@ -221,7 +221,8 @@ def build_draft(topic: dict) -> dict:
     articles = articles[:8]
     return generate.write_draft(CFG["model"], CFG["category"], topic, articles, style_notes(),
                                 CFG.get("draft_rules", ""), CFG.get("media_rule", ""),
-                                CFG.get("web_search", True), CFG.get("me_blocks", 1))
+                                CFG.get("web_search", True), CFG.get("me_blocks", 1),
+                                CFG.get("title_mode", "homefeed"))
 
 
 # ---------------------------------------------------------------- 텔레그램 출력
@@ -272,21 +273,26 @@ async def send_draft(bot, tid: int) -> None:
     await bot.send_message(CHAT_ID, f"🏷 제목 후보\n{titles}\n\n제목을 고르면 최종본이 나와요.", reply_markup=Kb(rows))
 
 
-def suggest_publish_time(n: int) -> str:
-    """오늘 n번째 글의 예약발행 추천 시각. 매번 분 단위가 달라지게 랜덤."""
-    windows = CFG.get("publish_windows", [["11:30", "13:00"], ["18:30", "21:00"]])
-    lo, hi = windows[(n - 1) % len(windows)]
+def suggest_publish_time(n: int = 0) -> str:
+    """지금 이후로 가장 가까운 발행 시간대 안의 시각 (분은 랜덤). 오늘 창이 다 지났으면 내일 첫 창."""
+    windows = CFG.get("publish_windows", [["07:30", "09:30"], ["12:00", "13:30"]])
     now = datetime.now(TZ)
-    h1, m1 = map(int, lo.split(":"))
-    h2, m2 = map(int, hi.split(":"))
-    start = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
-    end = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
-    if end <= now + timedelta(minutes=15):  # 오늘 창이 지났으면 내일
-        start, end = start + timedelta(days=1), end + timedelta(days=1)
-    start = max(start, now + timedelta(minutes=15))
-    t = start + timedelta(minutes=random.randint(0, max(int((end - start).total_seconds() // 60), 0)))
-    wd = "월화수목금토일"[t.weekday()]
-    return f"{t.month}/{t.day}({wd}) {t:%H:%M}"
+    soon = now + timedelta(minutes=10)
+
+    def at(day_shift: int, hm: str):
+        h, m = map(int, hm.split(":"))
+        return (now + timedelta(days=day_shift)).replace(hour=h, minute=m, second=0, microsecond=0)
+
+    for shift in (0, 1):
+        for lo, hi in windows:
+            start, end = at(shift, lo), at(shift, hi)
+            if end <= soon:
+                continue
+            start = max(start, soon)
+            t = start + timedelta(minutes=random.randint(0, max(int((end - start).total_seconds() // 60), 0)))
+            wd = "월화수목금토일"[t.weekday()]
+            return ("지금 바로 · " if t - now < timedelta(minutes=40) else "") + f"{t.month}/{t.day}({wd}) {t:%H:%M}"
+    return "내일 오전"
 
 
 async def send_img(bot, path: Path, caption: str) -> None:
@@ -394,8 +400,7 @@ async def finalize(bot, did: int, idx: int) -> None:
     await bot.send_message(
         CHAT_ID,
         "━━━━━━━━━━━━━━\n"
-        f"⏰ 예약발행 추천: {suggest_publish_time(n)}\n"
-        "(블로그 앱 발행 화면 → 예약 → 시간 설정)\n\n"
+        f"⏰ 발행 추천: {suggest_publish_time(n)} 전후 (오전 7시~오후 7시 사이, 발행 후 1~2시간 반응이 중요)\n\n"
         + generate.render_checklist(draft)
         + f"\n\n📊 오늘 {n}/{CFG['posts_per_day']}",
         reply_markup=Kb([[Btn("✅ 발행/예약 완료", callback_data=f"pub:{did}")]] if ACTIONS_MODE else

@@ -115,8 +115,22 @@ TOPIC_SYSTEM = """너는 네이버 블로그 편집자다. 오늘 뉴스 헤드�
 - keyword는 실제로 검색할 법한 2~5단어 롱테일 검색어. 대형 키워드 단독 금지.
 - 같은 이슈를 두 번 고르지 말 것. 정치 논쟁, 의료 효능, 투자 종목 추천은 제외.
 - 반드시 주어진 헤드라인으로 뒷받침되는 주제만. source_ids에 근거 헤드라인 id를 넣어라.
+- 여러 언론사가 몇 시간 안에 같은 소재를 다뤘다면 지금 막 뜨는 이슈다. 헤드라인 옆 (n시간 전)을 보고 신선한 것을 우선한다.
 - [시드: 홈판 메인 트렌드(오늘)]은 지금 네이버 홈판에서 실제로 터지는 글들이다. 카테고리에 맞는 소재가 있으면 최우선으로, 같은 소재를 다른 각도로 잡는다.
 """
+
+
+def age_label(pub: str) -> str:
+    """'(3시간 전)' 같은 신선도 표시. 홈판은 막 터진 이슈를 먼저 잡는 게 유리."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(pub)
+    except (TypeError, ValueError):
+        return ""
+    if dt.tzinfo is None:
+        return ""
+    h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    return f" ({int(h * 60)}분 전)" if h < 1 else f" ({int(h)}시간 전)" if h < 48 else ""
 
 
 def propose_topics(model: str, category: str, news_by_seed: dict[str, list[dict]], n: int,
@@ -127,7 +141,7 @@ def propose_topics(model: str, category: str, news_by_seed: dict[str, list[dict]
         for ni, it in enumerate(items):
             sid = f"{si}-{ni}"
             flat[sid] = it
-            lines.append(f"[{sid}] {it['title']} — {it['desc']}")
+            lines.append(f"[{sid}] {it['title']} — {it['desc']}{age_label(it.get('pub', ''))}")
 
     user = f"""카테고리: {category}
 카테고리 규칙:
@@ -174,14 +188,15 @@ DRAFT_SYSTEM = """너는 네이버 블로그 글 초안을 쓴다. 사람이 검
 3. 본문에 사실을 쓸 때마다 fact_checks에 그 주장과 실제로 확인한 페이지 URL을 넣는다. 날짜·수치·이름은 빠짐없이.
 4. "me" 블록을 정확히 1개 넣는다. 글쓴이가 한두 줄 덧붙일 자리다. content에는 답하기 쉬운 구체적 질문 하나만 적는다.
 5. 과장, 허위, 투자 권유, 의료 효능 주장 금지.
-6. 제목 5개, 유형별 하나씩: 숫자형, 손실회피형, 비교형, 궁금증형, 검색형. 모두 메인 키워드 포함, 가능하면 앞쪽. 제목이 던진 질문은 본문이 답해야 한다.
+7. 이미지 블록(card, table, aiimg, photo)은 소제목 바로 밑에 기계적으로 붙이지 말고, 설명하는 문단 사이사이 맥락에 맞는 자리에 2~3문단마다 하나씩 배치한다. 글만 길게 이어지면 이탈한다.
+6. 제목 규칙은 아래 '제목 규칙'을 따른다. 어떤 제목이든 던진 질문은 본문이 반드시 답해야 하고, 사실과 다른 과장은 금지.
 """
 
 DRAFT_SCHEMA = """{
  "titles":[{"type":"숫자형","text":"..."},{"type":"손실회피형","text":"..."},{"type":"비교형","text":"..."},{"type":"궁금증형","text":"..."},{"type":"검색형","text":"..."}],
  "thumbnail_text":"대표 이미지 문구. 2줄, 줄당 10자 내외, \\n으로 구분",
  "blocks":[
-   {"type":"text","content":"도입. 결론 먼저. 1~2문장마다 \\n\\n 줄바꿈"},
+   {"type":"text","content":"도입. 결론 먼저. 모바일 기준 3~4줄(2~3문장)마다 \\n\\n 로 문단 띄우기"},
    {"type":"card","content":"..."},
    {"type":"heading","content":"소제목"},
    {"type":"text","content":"..."},
@@ -206,9 +221,25 @@ WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_use
                    "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}
 
 
+TITLE_RULES = {
+    "homefeed": """제목 5개 모두 홈판용 후킹 제목. 피드를 넘기던 손가락이 멈출 만한 문장.
+- 25~40자. 메인 키워드(행사·장소·인물명)는 앞쪽에.
+- 유형을 섞는다: 궁금증형('~한 이유', '이게 웬일...'), 반전형('~인 줄 알았는데'), 숫자형('3주 만에', '딱 3일'),
+  인용형(작은따옴표로 시작하는 한마디), 손실회피형('모르고 가면 ~').
+- 말줄임표(...)나 물음표로 여운을 남겨도 좋다.
+- 가장 클릭될 제목을 맨 앞에 둔다. type에는 유형 이름을 적는다.""",
+    "search": """제목 5개, 유형별 하나씩: 숫자형, 손실회피형, 비교형, 궁금증형, 검색형.
+모두 메인 키워드 포함, 가능하면 앞쪽.""",
+}
+
+
 def write_draft(model: str, category: str, topic: dict, articles: list[dict], style_notes: str,
-                draft_rules: str = "", media_rule: str = "", web_search: bool = True, me_max: int = 1) -> dict:
+                draft_rules: str = "", media_rule: str = "", web_search: bool = True, me_max: int = 1,
+                title_mode: str = "homefeed") -> dict:
     user = f"""카테고리: {category}
+제목 규칙:
+{TITLE_RULES.get(title_mode, TITLE_RULES["homefeed"])}
+
 카테고리 규칙:
 {draft_rules}
 

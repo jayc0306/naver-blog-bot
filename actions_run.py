@@ -88,38 +88,68 @@ async def produce(tg: TG, tid: int) -> None:
     if draft.get("_notice"):
         await tg.send_message(bot.CHAT_ID, draft["_notice"])
     titles = draft["titles"]
-    # 하루 글을 번갈아: 홈판용 후킹 제목 ↔ 검색용 롱테일 제목 (어느 쪽이 먹히는지 비교)
-    n_today = store.count_day(bot.today(), ("approved", "published"))
-    want = ("궁금", "손실", "숫자") if n_today % 2 == 0 else ("검색",)
-    best = next((i for w in want for i, t in enumerate(titles) if w in t.get("type", "")), 0)
+    # 한 계정 안에서 홈판용과 검색용 제목을 섞지 않는다 (config title_mode)
+    if bot.CFG.get("title_mode", "homefeed") == "search":
+        best = next((i for i, t in enumerate(titles) if "검색" in t.get("type", "")), 0)
+    else:
+        best = 0  # 홈판 모드: AI가 가장 클릭될 제목을 맨 앞에 둠
     others = "\n".join(f"· {t['text']}" for i, t in enumerate(titles) if i != best)
     if others:
-        await tg.send_message(bot.CHAT_ID, f"🏷 다른 제목 후보 (마음에 들면 제목만 바꿔 쓰세요)\n{others}")
+        await tg.send_message(bot.CHAT_ID, f"🏷 다른 제목 후보 — 그대로 쓰지 말고 내 말투로 한 번 손보면 더 좋아요\n{others}")
     await bot.finalize(tg, did, best)
 
 
-async def daily(tg: TG, state: dict) -> None:
-    today = bot.today()
-    if state.get("last_daily") == today:
-        bot.log.info("daily already done today")
-        return
-    state["last_daily"] = today
+def slots() -> list[str]:
+    return sorted(bot.CFG.get("post_slots") or bot.CFG.get("schedule_times", ["07:30"])[:1])
+
+
+def due_slot(state: dict) -> str | None:
+    """시각이 지났는데 오늘 아직 안 한 발행 슬롯 하나."""
+    now = datetime.now(bot.TZ)
+    if now.hour >= 19:  # 골든타임(07~19시) 밖에서는 새 글을 만들지 않음
+        return None
+    done = state.get("slots", {})
+    done_today = done.get("done", []) if done.get("date") == bot.today() else []
+    for s in slots():
+        h, m = map(int, s.split(":"))
+        if now.hour * 60 + now.minute >= h * 60 + m and s not in done_today:
+            return s
+    return None
+
+
+def mark_slot(state: dict, slot: str) -> None:
+    done = state.get("slots", {})
+    if done.get("date") != bot.today():
+        done = {"date": bot.today(), "done": []}
+    done["done"].append(slot)
+    state["slots"] = done
+
+
+async def run_slot(tg: TG, state: dict, slot: str | None, forced: bool = False) -> None:
+    """슬롯 하나 = 글 (하루 목표 / 슬롯 수)개. forced 는 /run."""
+    if slot:
+        mark_slot(state, slot)
+    per = max(1, bot.CFG["posts_per_day"] // max(1, len(slots())))
     if bot.CFG.get("daily_mode", "candidates") == "remind":
-        await tg.send_message(bot.CHAT_ID, "☀️ 오늘 글감을 한 줄로 보내주세요. (30분 안에 처리돼요)")
+        await tg.send_message(bot.CHAT_ID, "☀️ 글 쓸 시간이에요. 글감을 한 줄로 보내주세요. (10분 안에 처리돼요)")
         return
-    await tg.send_message(bot.CHAT_ID, "☀️ 오늘 글감 찾는 중...")
+    await tg.send_message(bot.CHAT_ID, "🔎 지금 뜨는 글감 찾는 중..." + (f" ({slot} 슬롯)" if slot else ""))
     cands = await asyncio.to_thread(bot.build_candidates)
     if not cands:
-        await tg.send_message(bot.CHAT_ID, "오늘은 쓸 만한 후보가 없어요. 글감을 직접 보내주세요.")
+        await tg.send_message(bot.CHAT_ID, "지금은 쓸 만한 후보가 없어요. 글감을 직접 보내주세요.")
         return
-    n = bot.CFG["posts_per_day"]
-    rest = cands[n:]
+    rest = cands[per:]
     if rest:
         await tg.send_message(bot.CHAT_ID, "📋 다른 후보 (쓰고 싶으면 키워드를 그대로 보내세요)\n"
                               + "\n".join(f"· {t['keyword']} — {t.get('angle', '')}" for _, t in rest))
-    for tid, _ in cands[:n]:
+    for tid, _ in cands[:per]:
         store.claim_topic(tid)
         await produce(tg, tid)
+
+
+async def daily(tg: TG, state: dict) -> None:
+    """수동 실행(daily) — 지난 슬롯이 있으면 그걸, 없으면 한 편 강제로."""
+    await run_slot(tg, state, due_slot(state), forced=True)
 
 
 async def handle(tg: TG, upd: dict, state: dict) -> None:
@@ -168,10 +198,9 @@ async def handle(tg: TG, upd: dict, state: dict) -> None:
                               "· 후기: 장소명 + 줄바꿈 + 메모 → 내 경험 후기 글\n"
                               "· 사진 + 캡션(썸네일 문구) → 홈판용 썸네일\n"
                               "· 트렌드 + 줄바꿈 + 어드바이저 메인 트렌드 복사 → 주제·제목에 반영\n"
-                              "· /run → 오늘 글 지금 찾기 · /today → 현황")
+                              "· /run → 지금 한 편 바로 · /today → 현황")
     elif text.startswith("/run"):
-        state.pop("last_daily", None)
-        await daily(tg, state)
+        await run_slot(tg, state, None, forced=True)
     elif text.startswith("/today"):
         d = bot.today()
         await tg.send_message(chat, f"📊 {d} 완성 {store.count_day(d, ('approved', 'published'))} · 발행 {store.count_day(d, ('published',))} / 목표 {bot.CFG['posts_per_day']}")
@@ -261,13 +290,6 @@ def parse_trends(text: str) -> list[str]:
     return out[:40]
 
 
-def missed_morning(state: dict) -> bool:
-    now = datetime.now(bot.TZ)
-    h, m = map(int, sorted(bot.CFG.get("schedule_times", ["07:30"]))[0].split(":"))
-    late = now.hour * 60 + now.minute >= h * 60 + m + 20   # 예약 시각 20분 지나도
-    return late and now.hour < 21 and state.get("last_daily") != bot.today()
-
-
 async def main(mode: str) -> None:
     store.init()
     token = bot.os.environ.get(bot.CFG.get("telegram_token_env", "TELEGRAM_BOT_TOKEN"), "").strip()
@@ -281,10 +303,11 @@ async def main(mode: str) -> None:
         await poll(tg, state)          # 쌓인 메시지 먼저
         if mode == "daily":
             await daily(tg, state)
-        elif restored and missed_morning(state):
-            # GitHub가 아침 예약 실행을 건너뛰는 날이 있어서, 그 뒤 첫 poll 실행이 대신 처리
-            bot.log.info("daily run was skipped by GitHub, catching up")
-            await daily(tg, state)
+        elif restored:
+            slot = due_slot(state)
+            if slot:  # 발행 슬롯 시각이 지났으면 이번 실행이 처리 (한 번에 하나씩)
+                bot.log.info("slot %s due", slot)
+                await run_slot(tg, state, slot)
     finally:
         save_state(state)
 
